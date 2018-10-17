@@ -1,0 +1,263 @@
+<?php
+/**
+ * @file
+ * Module to provide an encrypted field storage.
+ *
+ */
+
+use Defuse\Crypto\KeyProtectedByPassword;
+use Defuse\Crypto\Crypto;
+
+/**
+ * Implements hook_menu
+ */
+function safe_menu() {
+  $entries = [
+    'safe-json/decrypt' => [
+      'page callback' => 'safe__page_decrypt',
+      'access arguments' => ['decrypt_safe_json'],
+    ],
+    'safe-json/encrypt' => [
+      'page callback' => 'safe__page_encrypt',
+      'access arguments' => ['encrypt_safe_json'],
+    ],
+    'admin/config/safe' => [
+      'title' => 'Edit Safe Key',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => ['safe__form_manage_keys'],
+      'access arguments' => ['manage_safe_keys'],
+    ],
+  ];
+  return $entries;
+}
+
+/**
+ * Implements hook_permission.
+ */
+function safe_permission() {
+  return [
+    'decrypt_safe_json' => [
+      'title' => t('Decrypt Safe JSON data'),
+      'description' => t('Required to allow users to attempt to decrypt the data.'),
+    ],
+    'encrypt_safe_json' => [
+      'title' => t('Encrypt Safe JSON data'),
+      'description' => t('Required to allow users to attempt to encrypt the data.'),
+    ],
+    'manage_safe_keys' => [
+      'title' => t('Manage Encryption Keys'),
+      'description' => t('Create/edit encryption keys.'),
+    ],
+  ];
+}
+
+/**
+ * This form allows setting the password on a key.
+ */
+function safe__form_manage_keys($form, &$form_state) {
+  $protected_key_encoded = variable_get('safe_ascii_protected_key', '');
+  if ($protected_key_encoded) {
+    $form['info'] = [
+      '#markup' => "<h2>Change Password</h2>",
+    ];
+    $form['existing_password'] = [
+      '#type'     => 'password',
+      '#title'    => 'Enter the key\'s existing password',
+      '#required' => TRUE,
+    ];
+  }
+  else {
+    $form['info'] = [
+      '#markup' => "<h2>Create Key</h2>",
+    ];
+  }
+
+  $form['new_password'] = [
+    '#type'     => 'password_confirm',
+    '#title'    => 'Enter new password',
+    '#required' => TRUE,
+  ];
+
+  $form['submit'] = [
+    '#type'     => 'submit',
+    '#value'    => 'Save',
+  ];
+
+  return $form;
+}
+/**
+ * This form allows setting the password on a key.
+ */
+function safe__form_manage_keys_validate($form, &$form_state) {
+
+  $protected_key_encoded = variable_get('safe_ascii_protected_key', '');
+  if ($protected_key_encoded) {
+    // Expect the current password to work.
+    try {
+      $key = KeyProtectedByPassword::loadFromAsciiSafeString($protected_key_encoded);
+      $key->unlockKey($form_state['values']['existing_password']);
+    }
+    catch (Exception $e) {
+      form_set_error("existing_password", "Could not unlock key with existing password");
+    }
+  }
+}
+/**
+ * Create new key or update password.
+ */
+function safe__form_manage_keys_submit($form, &$form_state) {
+
+  $protected_key_encoded = variable_get('safe_ascii_protected_key', '');
+  $ok_to_save = FALSE;
+
+  if ($protected_key_encoded) {
+    try {
+      $key = KeyProtectedByPassword::loadFromAsciiSafeString($protected_key_encoded);
+      $key->changePassword($form_state['values']['existing_password'],
+                            $form_state['values']['new_password']);
+      $ok_to_save = TRUE;
+    }
+    catch (Exception $e) {
+      drupal_set_message("Could not change password. Humph.", 'error');
+    }
+  }
+  else {
+    try {
+      $key = KeyProtectedByPassword::createRandomPasswordProtectedKey($form_state['values']['new_password']);
+      $ok_to_save = TRUE;
+    }
+    catch (Exception $e) {
+      drupal_set_message("Failed creating a new key.", 'error');
+    }
+  }
+  // Change a password.
+  if ($ok_to_save) {
+    variable_set('safe_ascii_protected_key', $key->saveToAsciiSafeString());
+    drupal_set_message('Password set.');
+  }
+}
+
+/**
+ * Ajax Page callback to attempt decryption of supplied data.
+ *
+ * We expect the data to be a json-encoded array like:
+ * [
+ *   'data' => 'xxxxxencrytptedxxxxx',
+ * ]
+ * This is to allow passing other metadata in future, eg. 'keyname'.
+ */
+function safe__page_decrypt() {
+  $data = json_decode($_POST['encrypted'] ?? '', TRUE);
+  $secret = $_POST['secret'] ?? '';
+  $response = [];
+  $response_http_status = 200;
+
+  try {
+    // For now, allow completely empty data.
+    if (empty($data)) {
+      $data = ['data' => ''];
+    }
+    if (!is_array($data) || !isset($data['data'])) {
+      throw new SafeAjaxException("Invalid data", 400);
+    }
+    if (!$secret) {
+      throw new SafeAjaxException("Missing password", 400);
+    }
+
+    // Try to decrypt the data.
+    $key = safe__get_key($_POST)->unlockKey($secret);
+    if (empty($data['data'])) {
+      $response['decrypted'] = '';
+    }
+    else {
+      $response['decrypted'] = Crypto::decrypt($data['data'], $key);
+    }
+  }
+  catch (SafeAjaxException $e) {
+    $response_http_status = $e->getCode();
+    $response['error'] = $e->getMessage();
+  }
+  catch (Exception $e) {
+    $response_http_status = 500;
+    $response['error'] = 'Server Error';
+  }
+  header("$_SERVER[SERVER_PROTOCOL] $response_http_status");
+  drupal_json_output($response);
+  if ($response_http_status === 500) {
+    throw $e;
+  }
+  drupal_exit();
+}
+
+/**
+ * Ajax Page callback to attempt decryption of supplied data.
+ *
+ * We require these keys at present:
+ * - decrypted
+ * - secret
+ *
+ * We return an array like
+ * ['encrypted' => [
+ *    'data' => 'xxxxxencrytptedxxxxx',
+ *   ]
+ * ]
+ */
+function safe__page_encrypt() {
+  $data = $_POST['decrypted'] ?? '';
+  $secret = $_POST['secret'] ?? '';
+  $response = [];
+  $response_http_status = 200;
+
+  try {
+    if (!is_string($data)) {
+      throw new SafeAjaxException("Invalid data", 400);
+    }
+    if (!$secret) {
+      throw new SafeAjaxException("Missing password", 400);
+    }
+
+    // Try to decrypt the data.
+    $key = safe__get_key($_POST)->unlockKey($secret);
+    if (empty($data)) {
+      $encrypted = '';
+    }
+    else {
+      $encrypted = Crypto::encrypt($data, $key);
+    }
+    $response = ['encrypted' => ['data' => $encrypted]];
+  }
+  catch (SafeAjaxException $e) {
+    $response_http_status = $e->getCode();
+    $response['error'] = $e->getMessage();
+  }
+  catch (Exception $e) {
+    $response_http_status = 500;
+    $response['error'] = 'Server Error';
+  }
+  header("$_SERVER[SERVER_PROTOCOL] $response_http_status");
+  drupal_json_output($response);
+  if ($response_http_status === 500) {
+    throw $e;
+  }
+  drupal_exit();
+}
+
+/**
+ * Get the encrypted key.
+ *
+ * Currently we have one site-wide key, but in future we may have several,
+ * selectable by something like $data['key_id']
+ *
+ * @param array $data
+ * @return string
+ */
+function safe__get_key($data) {
+  $protected_key_encoded = variable_get('safe_ascii_protected_key', '');
+  if (!$protected_key_encoded) {
+    throw new SafeAjaxException("No key configured", 400);
+  }
+  return KeyProtectedByPassword::loadFromAsciiSafeString($protected_key_encoded);
+}
+
+
+class SafeAjaxException extends Exception {}

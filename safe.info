@@ -1,0 +1,8 @@
+name = Safe
+description = Provides API for keeping content stored encrypted.
+core = 7.x
+version = 7.x-0.1
+
+dependencies[] = safe_json
+
+
