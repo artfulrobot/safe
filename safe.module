@@ -7,6 +7,7 @@
 
 use Defuse\Crypto\KeyProtectedByPassword;
 use Defuse\Crypto\Crypto;
+use Defuse\Crypto\Exception\WrongKeyOrModifiedCiphertextException;
 
 /**
  * Implements hook_menu
@@ -177,6 +178,10 @@ function safe__page_decrypt() {
     $response_http_status = $e->getCode();
     $response['error'] = $e->getMessage();
   }
+  catch (WrongKeyOrModifiedCiphertextException $e) {
+    $response_http_status = 400;
+    $response['error'] = "Wrong password.";
+  }
   catch (Exception $e) {
     $response_http_status = 500;
     $response['error'] = 'Server Error';
@@ -229,6 +234,10 @@ function safe__page_encrypt() {
   catch (SafeAjaxException $e) {
     $response_http_status = $e->getCode();
     $response['error'] = $e->getMessage();
+  }
+  catch (WrongKeyOrModifiedCiphertextException $e) {
+    $response_http_status = 400;
+    $response['error'] = "Wrong password.";
   }
   catch (Exception $e) {
     $response_http_status = 500;
