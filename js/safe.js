@@ -34,11 +34,12 @@
           })
           .done(function(result) {
             $textarea
-              .attr('rows', Math.min((result.decrypted + '\n').match(/\n/g).length, 8))
+              .attr('rows', Math.max(5, Math.min((result.decrypted + '\n').match(/\n/g).length, 8)))
               .val(result.decrypted);
 
             $textarea[0].savedValue = result.decrypted;
             $decrypted.fadeIn();
+            $textarea.focus();
             $loading.html("&#x1f512; When done editing, press Encrypt, then Save.");
           })
           .fail(function(r, f) {
