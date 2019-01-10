@@ -18,7 +18,7 @@
     var $textarea;
     var $password_field = $('<input type="password" class="form-text"/>')
       .attr('id', id)
-      .on('keydown', function(e) {
+      .on('keypress', function(e) {
         if (e.keyCode != 13) {
           return;
         }
@@ -115,10 +115,11 @@
       $label = $('<label>&#x1f512; Enter decryption password</label>').attr('for', id),
       $password = $('<input type="password" class="safe-password" />').attr('id', id);
 
-    $password.on('keydown', function(e) {
-      if (e.keyCode != 13) {
+    $password.on('keypress', function(e) {
+      if (e.which != 13) {
         return;
       }
+      e.preventDefault();
       $label.hide();
       $password.hide();
       $results_div.text('Attempting to decrypt...');
