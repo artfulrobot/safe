@@ -1,5 +1,0 @@
-name = Safe JSON field
-description = Provides field for keeping content stored encrypted.
-core = 7.x
-version = 7.x-0.1
-
